@@ -1,6 +1,10 @@
+import com.vanniktech.maven.publish.JavaLibrary
+import com.vanniktech.maven.publish.JavadocJar
+import com.vanniktech.maven.publish.SourcesJar
+
 plugins {
     `java-library`
-    `maven-publish`
+    id("com.vanniktech.maven.publish") version "0.37.0"
 }
 
 group = project.property("group") as String
@@ -12,8 +16,6 @@ java {
     }
     sourceCompatibility = JavaVersion.VERSION_11
     targetCompatibility = JavaVersion.VERSION_11
-    withSourcesJar()
-    withJavadocJar()
 }
 
 repositories {
@@ -47,10 +49,52 @@ tasks.javadoc {
     (options as StandardJavadocDocletOptions).addStringOption("Xdoclint:none", "-quiet")
 }
 
-publishing {
-    publications {
-        create<MavenPublication>("maven") {
-            from(components["java"])
+mavenPublishing {
+    // automaticRelease = false: stages the deployment on Central Portal but requires a manual
+    // "Publish" click there before it goes live. Flip to true once the release process is trusted
+    // — Central artifacts can never be deleted once published, so the first few releases warrant
+    // a manual look.
+    publishToMavenCentral(automaticRelease = false)
+    signAllPublications()
+
+    coordinates(group.toString(), "xingen-sdk", version.toString())
+
+    configure(
+        JavaLibrary(
+            javadocJar = JavadocJar.Javadoc(),
+            sourcesJar = SourcesJar.Sources(),
+        )
+    )
+
+    pom {
+        name.set("Xingen SDK")
+        description.set(
+            "Java client SDK for the Xingen e-invoice validation API - submit UBL, CII, ZUGFeRD, " +
+                "and SAP IDoc/OData invoices for validation against EN16931, XRechnung, and Peppol."
+        )
+        inceptionYear.set("2026")
+        url.set("https://github.com/nko-technologies/xingen-java-sdk")
+
+        licenses {
+            license {
+                name.set("MIT License")
+                url.set("https://opensource.org/licenses/MIT")
+                distribution.set("https://opensource.org/licenses/MIT")
+            }
+        }
+
+        developers {
+            developer {
+                id.set("manuelgerstner")
+                name.set("Manuel Gerstner")
+                email.set("manuel@nko-technologies.com")
+            }
+        }
+
+        scm {
+            url.set("https://github.com/nko-technologies/xingen-java-sdk")
+            connection.set("scm:git:git://github.com/nko-technologies/xingen-java-sdk.git")
+            developerConnection.set("scm:git:ssh://git@github.com/nko-technologies/xingen-java-sdk.git")
         }
     }
 }
