@@ -45,4 +45,7 @@ public class InvoiceRecord {
     private String uploadedBy;
     private boolean sandbox;
     private UUID apiKeyId;
+
+    /** Extraction quality tier used ({@code FAST}/{@code ACCURATE}) — only set for AI PDF extractions ({@link #getInvoiceFormat()} {@code == "PDF_AI"}). */
+    private String extractionTier;
 }

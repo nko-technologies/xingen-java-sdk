@@ -3,6 +3,8 @@ package de.xingen.sdk.invoices;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import de.xingen.sdk.XingenClient;
+import de.xingen.sdk.model.AutoFilledField;
+import de.xingen.sdk.model.ExtractionModelTier;
 import de.xingen.sdk.model.ValidationProfile;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -15,6 +17,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -152,6 +155,57 @@ class InvoicesClientIntegrationTest {
         assertThat(result.getId()).isEqualTo("inv_odata");
         assertThat(lastExchange.get().getRequestURI().getQuery()).isEqualTo("profile=EN16931");
         assertThat(capturedBody.get()).isEqualTo("{\"SupplierInvoice\":\"raw-payload\"}");
+    }
+
+    @Test
+    void extractInvoiceSendsProfileAndTierAsQueryParamsAndFileAsMultipartField() throws Exception {
+        AtomicReference<String> capturedBody = new AtomicReference<>();
+        server.createContext("/v1/invoices/extract", exchange -> {
+            lastExchange.set(exchange);
+            capturedBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            respond(exchange, 202, "{\"id\":\"inv_789\",\"status\":\"processing\"}");
+        });
+
+        InvoiceSubmissionResult result = client.invoices()
+            .extractInvoice("invoice.pdf", "%PDF-1.4".getBytes(StandardCharsets.UTF_8),
+                ValidationProfile.EN16931, ExtractionModelTier.ACCURATE);
+
+        assertThat(result.getId()).isEqualTo("inv_789");
+
+        HttpExchange exchange = lastExchange.get();
+        assertThat(exchange.getRequestURI().getQuery()).isEqualTo("profile=EN16931&tier=ACCURATE");
+        assertThat(exchange.getRequestHeaders().getFirst("Content-Type")).startsWith("multipart/form-data; boundary=");
+        assertThat(capturedBody.get())
+            .contains("Content-Disposition: form-data; name=\"file\"; filename=\"invoice.pdf\"")
+            .doesNotContain("name=\"profile\"")
+            .doesNotContain("name=\"tier\"");
+    }
+
+    @Test
+    void patchInvoiceSendsMergePatchAndDecodesUpdatedRecord() throws Exception {
+        AtomicReference<String> capturedBody = new AtomicReference<>();
+        server.createContext("/v1/invoices/inv_01HXYZ", exchange -> {
+            lastExchange.set(exchange);
+            capturedBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            respond(exchange, 200, FIXTURE);
+        });
+
+        InvoiceRecord record = client.invoices().patchInvoice("inv_01HXYZ", Map.of("currency", "USD"));
+
+        assertThat(lastExchange.get().getRequestMethod()).isEqualTo("PATCH");
+        assertThat(capturedBody.get()).isEqualTo("{\"currency\":\"USD\"}");
+        assertThat(record.getId()).isEqualTo("inv_01HXYZ");
+    }
+
+    @Test
+    void getAutoFilledFieldsDecodesMapByProfile() throws Exception {
+        server.createContext("/v1/invoices/auto-filled-fields", exchange -> respond(exchange, 200,
+            "{\"EN16931\":[{\"field\":\"typeCode\",\"value\":\"380\",\"reason\":\"Defaults to a commercial invoice.\"}]}"));
+
+        Map<String, List<AutoFilledField>> fields = client.invoices().getAutoFilledFields();
+
+        assertThat(fields.get("EN16931")).hasSize(1);
+        assertThat(fields.get("EN16931").get(0).getField()).isEqualTo("typeCode");
     }
 
     @Test

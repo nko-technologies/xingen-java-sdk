@@ -10,6 +10,8 @@ import de.xingen.sdk.http.RequestBuilder;
 import de.xingen.sdk.http.Requests;
 import de.xingen.sdk.http.ResponseHandler;
 import de.xingen.sdk.internal.Preconditions;
+import de.xingen.sdk.model.AutoFilledField;
+import de.xingen.sdk.model.ExtractionModelTier;
 import de.xingen.sdk.model.ValidationProfile;
 import de.xingen.sdk.paging.Page;
 import de.xingen.sdk.paging.PageIterator;
@@ -23,6 +25,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
@@ -33,6 +36,8 @@ public final class InvoicesClient {
     private static final String VALIDATE_PATH = BASE_PATH + "/validate";
     private static final String VALIDATE_IDOC_PATH = BASE_PATH + "/validate/idoc";
     private static final String VALIDATE_ODATA_PATH = BASE_PATH + "/validate/odata";
+    private static final String EXTRACT_PATH = BASE_PATH + "/extract";
+    private static final String AUTO_FILLED_FIELDS_PATH = BASE_PATH + "/auto-filled-fields";
 
     private final HttpTransport transport;
     private final RequestBuilder requestBuilder;
@@ -61,6 +66,42 @@ public final class InvoicesClient {
         Preconditions.requireNonBlank(id, "id");
         HttpRequest httpRequest = requestBuilder.newRequest(BASE_PATH + "/" + id).GET().build();
         return decode(httpRequest, InvoiceRecord.class);
+    }
+
+    /**
+     * Applies a JSON merge-patch (RFC 7386) to the invoice's canonical fields — e.g. to fill in
+     * fields an AI extraction missed, or fix a value flagged by validation — and re-validates
+     * synchronously. Array fields (lines, paymentMeans, allowanceCharges, taxBreakdowns) are
+     * replaced wholesale when present in the patch; submit the complete corrected array, not a
+     * single element. Only invoices that have finished processing can be corrected.
+     */
+    public InvoiceRecord patchInvoice(String id, Map<String, Object> patch) {
+        Preconditions.requireNonNull(patch, "patch");
+        return patchInvoice(id, new String(json.encode(patch), StandardCharsets.UTF_8));
+    }
+
+    /** Same as {@link #patchInvoice(String, Map)}, for callers who already hold the merge-patch as raw JSON. */
+    public InvoiceRecord patchInvoice(String id, String rawJsonPatch) {
+        Preconditions.requireNonBlank(id, "id");
+        Preconditions.requireNonBlank(rawJsonPatch, "rawJsonPatch");
+
+        HttpRequest httpRequest = requestBuilder.newRequest(BASE_PATH + "/" + id)
+            .header("Content-Type", "application/json")
+            .method("PATCH", HttpRequest.BodyPublishers.ofByteArray(rawJsonPatch.getBytes(StandardCharsets.UTF_8)))
+            .build();
+        return decode(httpRequest, InvoiceRecord.class);
+    }
+
+    /**
+     * Returns, per validation profile, the invoice fields the JSON create/PATCH/AI-extraction
+     * endpoints backfill automatically (e.g. invoice type code, specification identifier) — so a
+     * client can tell the user rather than leave the gap unexplained.
+     */
+    public Map<String, List<AutoFilledField>> getAutoFilledFields() {
+        HttpRequest httpRequest = requestBuilder.newRequest(AUTO_FILLED_FIELDS_PATH).GET().build();
+        HttpResponse<byte[]> response = Requests.send(transport, httpRequest);
+        return ResponseHandler.decodeOrThrow(response, new TypeReference<>() {
+        }, json);
     }
 
     /** Matches the backend's default sort of {@code createdAt,desc} when {@code sort} is null. */
@@ -114,6 +155,44 @@ public final class InvoicesClient {
     public InvoiceSubmissionResult submitOData(String rawJson, ValidationProfile profile) {
         Preconditions.requireNonBlank(rawJson, "rawJson");
         HttpRequest httpRequest = odataPost(rawJson.getBytes(StandardCharsets.UTF_8), profile);
+        return decode(httpRequest, InvoiceSubmissionResult.class);
+    }
+
+    /**
+     * Uploads a plain (non-XRechnung/UBL/CII) invoice PDF — including scanned/image-based PDFs —
+     * for AI-based field extraction (Claude). The extracted invoice is validated and converted to
+     * a ZUGFeRD/Factur-X hybrid PDF, downloadable via {@link #downloadPdf} once processing
+     * completes. Processing is asynchronous — poll {@link #get} or use {@link #extractInvoiceAndWait}.
+     * {@code tier == }{@link ExtractionModelTier#ACCURATE} requires a Pro subscription.
+     */
+    public InvoiceSubmissionResult extractInvoice(Path file, ValidationProfile profile, ExtractionModelTier tier) {
+        Preconditions.requireNonNull(file, "file");
+        return extract(file.getFileName().toString(), readBytes(file), profile, tier);
+    }
+
+    /** Same as {@link #extractInvoice(Path, ValidationProfile, ExtractionModelTier)}, for callers who already hold the file bytes in memory. */
+    public InvoiceSubmissionResult extractInvoice(String filename, byte[] content, ValidationProfile profile, ExtractionModelTier tier) {
+        return extract(filename, content, profile, tier);
+    }
+
+    private InvoiceSubmissionResult extract(String filename, byte[] content, ValidationProfile profile, ExtractionModelTier tier) {
+        Preconditions.requireNonBlank(filename, "filename");
+        Preconditions.requireNonNull(content, "content");
+        Preconditions.requireNonNull(profile, "profile");
+        Preconditions.requireNonNull(tier, "tier");
+
+        // profile/tier are query parameters here, not form fields, matching every other multipart endpoint.
+        MultipartBodyPublisher multipart = new MultipartBodyPublisher()
+            .addFilePart("file", filename, content, guessContentType(filename));
+        Map<String, String> query = RequestBuilder.query()
+            .put("profile", profile.name())
+            .put("tier", tier.name())
+            .build();
+
+        HttpRequest httpRequest = requestBuilder.newRequest(EXTRACT_PATH, query)
+            .header("Content-Type", multipart.contentTypeHeader())
+            .POST(multipart.build())
+            .build();
         return decode(httpRequest, InvoiceSubmissionResult.class);
     }
 
@@ -174,6 +253,16 @@ public final class InvoicesClient {
     /** Same as {@link #validateIdocAndWait(Path, ValidationProfile, PollOptions)}, for in-memory file bytes. */
     public InvoiceRecord validateIdocAndWait(String filename, byte[] content, ValidationProfile profile, PollOptions options) {
         return pollUntilTerminal(validateIdoc(filename, content, profile).getId(), options);
+    }
+
+    /** Uploads {@code file} for AI extraction and polls {@link #get} until validation reaches a terminal status. */
+    public InvoiceRecord extractInvoiceAndWait(Path file, ValidationProfile profile, ExtractionModelTier tier, PollOptions options) {
+        return pollUntilTerminal(extractInvoice(file, profile, tier).getId(), options);
+    }
+
+    /** Same as {@link #extractInvoiceAndWait(Path, ValidationProfile, ExtractionModelTier, PollOptions)}, for in-memory file bytes. */
+    public InvoiceRecord extractInvoiceAndWait(String filename, byte[] content, ValidationProfile profile, ExtractionModelTier tier, PollOptions options) {
+        return pollUntilTerminal(extractInvoice(filename, content, profile, tier).getId(), options);
     }
 
     /**
