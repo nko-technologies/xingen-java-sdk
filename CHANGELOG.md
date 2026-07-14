@@ -8,6 +8,9 @@
   (`PATCH /v1/invoices/{id}`).
 - `getAutoFilledFields` — list the invoice fields the backend fills in automatically, per
   validation profile (`GET /v1/invoices/auto-filled-fields`), via the new `AutoFilledField` model.
+- `InvoiceSubmission.PartyInput` gained an `address` field (new `InvoiceSubmission.AddressInput`
+  nested type: `streetName`/`city`/`postalZone`/`countryCode`) — the backend now rejects a party
+  with no postal address on every profile, and `submit()` had no way to supply one.
 
 ## 0.1.0
 

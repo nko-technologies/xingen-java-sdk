@@ -42,6 +42,20 @@ public class InvoiceSubmission {
         private final String name;
         private final String vatId;
         private final String leitwegId;
+        /** Postal address (BG-5/BG-8) — mandatory for every profile; the backend rejects a party with no address. */
+        private final AddressInput address;
+    }
+
+    /** Postal address (BG-5/BG-8) of a {@link PartyInput}. Only {@code countryCode} is mandatory server-side. */
+    @Getter
+    @Builder
+    @ToString
+    @EqualsAndHashCode
+    public static class AddressInput {
+        private final String streetName;
+        private final String city;
+        private final String postalZone;
+        private final String countryCode;
     }
 
     /** A single invoice line, as submitted with a new invoice. */
