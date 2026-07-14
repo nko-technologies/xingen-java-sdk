@@ -88,8 +88,102 @@ class InvoicesClientIntegrationTest {
         String body = capturedBody.get();
         assertThat(body).contains("\"invoiceNumber\":\"INV-2024-0042\"")
             .contains("\"validationProfile\":\"XRECHNUNG\"")
-            .contains("\"supplier\":{\"name\":\"Acme GmbH\",\"vatId\":\"DE123456789\"")
+            .contains("\"name\":\"Acme GmbH\"")
+            .contains("\"vatId\":\"DE123456789\"")
             .contains("\"lines\":[{\"description\":\"Software License Q1\"");
+    }
+
+    @Test
+    void submitSendsFullDomainModelFieldsWhenPresent() throws Exception {
+        AtomicReference<String> capturedBody = new AtomicReference<>();
+        server.createContext("/v1/invoices", exchange -> {
+            capturedBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            respond(exchange, 202, "{\"id\":\"inv_full\",\"status\":\"processing\"}");
+        });
+
+        InvoiceSubmission submission = InvoiceSubmission.builder()
+            .invoiceNumber("INV-2024-0099")
+            .issueDate(LocalDate.of(2024, 3, 15))
+            .dueDate(LocalDate.of(2024, 4, 14))
+            .paymentTermsNote("Net 30")
+            .currency("EUR")
+            .validationProfile(ValidationProfile.EN16931)
+            .orderReference("PO-1")
+            .addNote("Thank you for your business")
+            .addPrecedingInvoiceReference(InvoiceSubmission.PrecedingInvoiceReferenceInput.builder()
+                .id("INV-2024-0001").issueDate(LocalDate.of(2024, 1, 1)).build())
+            .addSupportingDocument(InvoiceSubmission.SupportingDocumentInput.builder()
+                .id("DOC-1").typeCode("50").description("Delivery note").build())
+            .invoicePeriod(InvoiceSubmission.InvoicePeriodInput.builder()
+                .startDate(LocalDate.of(2024, 3, 1)).endDate(LocalDate.of(2024, 3, 31)).build())
+            .delivery(InvoiceSubmission.DeliveryInput.builder()
+                .partyName("Warehouse Co")
+                .address(InvoiceSubmission.AddressInput.builder().city("Hamburg").countryCode("DE").build())
+                .build())
+            .supplier(InvoiceSubmission.PartyInput.builder()
+                .name("Acme GmbH")
+                .registrationName("Acme GmbH Legal")
+                .vatId("DE123456789")
+                .address(InvoiceSubmission.AddressInput.builder().city("Berlin").countryCode("DE").build())
+                .contact(InvoiceSubmission.ContactInput.builder().name("Jane Doe").email("jane@acme.example").build())
+                .addIdentifier(InvoiceSubmission.PartyIdentifierInput.builder().id("DE98ZZZ09999999999").schemeId("SEPA").build())
+                .build())
+            .buyer(InvoiceSubmission.PartyInput.builder().name("Buyer Co")
+                .address(InvoiceSubmission.AddressInput.builder().countryCode("DE").build())
+                .build())
+            .payee(InvoiceSubmission.PartyInput.builder().name("Payee GmbH")
+                .address(InvoiceSubmission.AddressInput.builder().countryCode("DE").build())
+                .build())
+            .addLine(InvoiceSubmission.LineInput.builder()
+                .description("Consulting services")
+                .itemName("Consulting")
+                .quantity(BigDecimal.ONE)
+                .unit("C62")
+                .price(new BigDecimal("500.00"))
+                .taxRate(new BigDecimal("19"))
+                .addClassification(InvoiceSubmission.ItemClassificationInput.builder().code("1234").build())
+                .addAttribute(InvoiceSubmission.ItemAttributeInput.builder().name("Color").value("Blue").build())
+                .build())
+            .addLine(InvoiceSubmission.LineInput.builder()
+                .description("Export sale")
+                .quantity(BigDecimal.ONE)
+                .unit("C62")
+                .price(new BigDecimal("100.00"))
+                .taxRate(BigDecimal.ZERO)
+                .taxCategoryCode("G")
+                .exemptionReason("Export outside the EU")
+                .exemptionReasonCode("VATEX-EU-G")
+                .build())
+            .addPaymentMeans(InvoiceSubmission.PaymentMeansInput.builder()
+                .typeCode("58").creditTransferAccountId("DE89370400440532013000").build())
+            .addAllowanceCharge(InvoiceSubmission.AllowanceChargeInput.builder()
+                .charge(true).amount(new BigDecimal("5.00")).vatCategoryCode("S").vatRate(new BigDecimal("19")).build())
+            .build();
+
+        InvoiceSubmissionResult result = client.invoices().submit(submission);
+
+        assertThat(result.getId()).isEqualTo("inv_full");
+
+        String body = capturedBody.get();
+        assertThat(body)
+            .contains("\"dueDate\":\"2024-04-14\"")
+            .contains("\"paymentTermsNote\":\"Net 30\"")
+            .contains("\"orderReference\":\"PO-1\"")
+            .contains("\"notes\":[\"Thank you for your business\"]")
+            .contains("\"precedingInvoiceReferences\":[{\"id\":\"INV-2024-0001\"")
+            .contains("\"supportingDocuments\":[{\"id\":\"DOC-1\"")
+            .contains("\"invoicePeriod\":{\"startDate\":\"2024-03-01\"")
+            .contains("\"delivery\":{\"partyName\":\"Warehouse Co\"")
+            .contains("\"registrationName\":\"Acme GmbH Legal\"")
+            .contains("\"identifiers\":[{\"id\":\"DE98ZZZ09999999999\",\"schemeId\":\"SEPA\"}]")
+            .contains("\"payee\":{\"name\":\"Payee GmbH\"")
+            .contains("\"classifications\":[{\"code\":\"1234\"")
+            .contains("\"attributes\":[{\"name\":\"Color\",\"value\":\"Blue\"}]")
+            .contains("\"taxCategoryCode\":\"G\"")
+            .contains("\"exemptionReason\":\"Export outside the EU\"")
+            .contains("\"exemptionReasonCode\":\"VATEX-EU-G\"")
+            .contains("\"paymentMeans\":[{\"typeCode\":\"58\"")
+            .contains("\"allowanceCharges\":[{\"charge\":true,\"amount\":5.00");
     }
 
     @Test

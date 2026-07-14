@@ -136,10 +136,21 @@ InvoiceSubmission submission = InvoiceSubmission.builder()
         .price(new BigDecimal("199.00"))
         .taxRate(new BigDecimal("19"))
         .build())
+    .addPaymentMeans(InvoiceSubmission.PaymentMeansInput.builder()
+        .typeCode("58")
+        .creditTransferAccountId("DE89370400440532013000")
+        .build())
     .build();
 
 InvoiceRecord result = client.invoices().submitAndWait(submission, PollOptions.defaults());
 ```
+
+`InvoiceSubmission` has full parity with the backend's domain model — every invoice type it can
+validate, it can also submit, including non-standard VAT categories (exempt/reverse-charge/export
+via `LineInput.taxCategoryCode` + `exemptionReason`/`exemptionReasonCode`), `payee`/
+`taxRepresentative`, `delivery`, `invoicePeriod`, `precedingInvoiceReferences` (for credit notes),
+and the full BT-11..BT-19 document reference fields. See the nested builders on
+`InvoiceSubmission` for the complete set.
 
 SAP S/4HANA OData supplier-invoice payloads are supported as a thin passthrough — pass raw JSON or
 a `Map<String, Object>` rather than a fully typed model:
